@@ -1,4 +1,18 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect } from "react";
+import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import L from "leaflet";
+
+// Fix for default markers in react-leaflet
+import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
+import markerIcon from "leaflet/dist/images/marker-icon.png";
+import markerShadow from "leaflet/dist/images/marker-shadow.png";
+
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconUrl: markerIcon,
+  iconRetinaUrl: markerIcon2x,
+  shadowUrl: markerShadow,
+});
 
 const WildfireProximityApp = () => {
   const [address, setAddress] = useState("");
@@ -8,13 +22,10 @@ const WildfireProximityApp = () => {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [currentPage, setCurrentPage] = useState("list");
   const [userLocation, setUserLocation] = useState(null);
-  const [leafletLoaded, setLeafletLoaded] = useState(false);
 
-  // API endpoints
   const GEOCODING_API =
     "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates";
 
-  // Haversine formula for distance calculation
   const calculateDistance = (lat1, lon1, lat2, lon2) => {
     const R = 6371;
     const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -292,199 +303,130 @@ const WildfireProximityApp = () => {
     }
   };
 
-  // Load Leaflet once when component mounts
   useEffect(() => {
-    if (!window.L && !leafletLoaded) {
-      const link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
-      link.integrity = "sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=";
-      link.crossOrigin = "";
-      document.head.appendChild(link);
-
-      const script = document.createElement("script");
-      script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
-      script.integrity = "sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=";
-      script.crossOrigin = "";
-      script.onload = () => setLeafletLoaded(true);
-      script.onerror = () => {
-        console.error("Failed to load Leaflet");
-        setError("Map functionality unavailable");
-      };
-      document.body.appendChild(script);
-    } else if (window.L) {
-      setLeafletLoaded(true);
-    }
-
     const interval = setInterval(() => {
       sessionStorage.removeItem("wildfireData");
     }, 10 * 60 * 1000);
 
     return () => clearInterval(interval);
-  }, [leafletLoaded]);
+  }, []);
 
-  // Interactive Map Component
+  // Custom fire marker icon
+  const createFireIcon = (status) => {
+    const color =
+      status === "OC" ? "#dc2626" : status === "BH" ? "#f59e0b" : "#16a34a";
+    return L.divIcon({
+      html: `<div style="background: ${color}; color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 14px; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">🔥</div>`,
+      className: "custom-div-icon",
+      iconSize: [24, 24],
+      iconAnchor: [12, 12],
+    });
+  };
+
+  // User location icon
+  const userIcon = L.divIcon({
+    html: '<div style="background: #3b82f6; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px;">📍</div>',
+    className: "custom-div-icon",
+    iconSize: [20, 20],
+    iconAnchor: [10, 10],
+  });
+
+  // Interactive Map Component using react-leaflet
   const InteractiveMap = () => {
-    const mapRef = useRef(null);
-    const mapInstanceRef = useRef(null);
-    const markersRef = useRef([]);
-
-    const updateMapMarkers = useCallback(() => {
-      if (!mapInstanceRef.current || !window.L) return;
-
-      markersRef.current.forEach((marker) => {
-        mapInstanceRef.current.removeLayer(marker);
-      });
-      markersRef.current = [];
-
-      const bounds = [];
-      const currentUserLocation = userLocation;
-      const currentResults = results;
-      const currentAddress = address;
-
-      if (currentUserLocation) {
-        const userMarker = window.L.marker(
-          [currentUserLocation.lat, currentUserLocation.lng],
-          {
-            icon: window.L.divIcon({
-              html: '<div style="background: #3b82f6; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px;">📍</div>',
-              className: "custom-div-icon",
-              iconSize: [20, 20],
-              iconAnchor: [10, 10],
-            }),
-          }
-        ).addTo(mapInstanceRef.current);
-
-        userMarker.bindPopup(`
-          <div style="font-size: 14px;">
-            <strong>Your Location</strong><br>
-            ${currentUserLocation.address || currentAddress}
-          </div>
-        `);
-
-        markersRef.current.push(userMarker);
-        bounds.push([currentUserLocation.lat, currentUserLocation.lng]);
-      }
-
-      currentResults.forEach((fire) => {
-        const getMarkerColor = (status) => {
-          switch (status) {
-            case "OC":
-              return "#dc2626";
-            case "BH":
-              return "#f59e0b";
-            case "UC":
-              return "#16a34a";
-            default:
-              return "#6b7280";
-          }
-        };
-
-        const marker = window.L.marker([fire.LATITUDE, fire.LONGITUDE], {
-          icon: window.L.divIcon({
-            html: `<div style="background: ${getMarkerColor(
-              fire.STATUS
-            )}; color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 14px; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">🔥</div>`,
-            className: "custom-div-icon",
-            iconSize: [24, 24],
-            iconAnchor: [12, 12],
-          }),
-        }).addTo(mapInstanceRef.current);
-
-        const risk = currentUserLocation
-          ? getRiskLevel(fire.distance, fire.STATUS)
-          : null;
-
-        marker.bindPopup(`
-          <div style="font-size: 14px; min-width: 200px;">
-            <strong style="color: ${getMarkerColor(fire.STATUS)};">${
-          fire.NAME || `Fire #${fire.PROVFIRENUM}`
-        }</strong><br>
-            <strong>Status:</strong> ${getStatusText(fire.STATUS)}<br>
-            <strong>Area:</strong> ${
-              fire.AREAEST ? `${fire.AREAEST} hectares` : "TBD"
-            }<br>
-            <strong>Cause:</strong> ${fire.CAUSE || "Unknown"}<br>
-            ${
-              currentUserLocation
-                ? `<strong>Distance:</strong> ${fire.distance.toFixed(
-                    1
-                  )} km<br>`
-                : ""
-            }
-            ${
-              risk
-                ? `<strong>Risk Level:</strong> <span style="color: ${getMarkerColor(
-                    fire.STATUS
-                  )};">${risk.level}</span>`
-                : ""
-            }
-          </div>
-        `);
-
-        markersRef.current.push(marker);
-        bounds.push([fire.LATITUDE, fire.LONGITUDE]);
-      });
-
-      if (bounds.length > 0) {
-        mapInstanceRef.current.fitBounds(bounds, { padding: [20, 20] });
-      }
-    }, []);
-
-    const initMap = useCallback(() => {
-      if (!leafletLoaded || !window.L) return;
-
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
-      }
-
-      const map = window.L.map(mapRef.current).setView([48.5, -56.5], 6);
-
-      window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "© OpenStreetMap contributors",
-      }).addTo(map);
-
-      mapInstanceRef.current = map;
-      updateMapMarkers();
-    }, [updateMapMarkers]);
-
-    useEffect(() => {
-      if (leafletLoaded) {
-        initMap();
-      }
-
-      return () => {
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.remove();
-          mapInstanceRef.current = null;
-        }
-      };
-    }, [initMap]);
-
-    // Update markers when results or userLocation changes
-    useEffect(() => {
-      if (mapInstanceRef.current && leafletLoaded) {
-        updateMapMarkers();
-      }
-    }, [results, userLocation, address, updateMapMarkers]);
-
-    if (!leafletLoaded) {
-      return (
-        <div className="w-full h-96 md:h-[500px] rounded-lg border border-gray-300 flex items-center justify-center">
-          <div className="text-center">
-            <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
-            <p className="text-gray-600">Loading map...</p>
-          </div>
-        </div>
-      );
-    }
+    const mapCenter = userLocation
+      ? [userLocation.lat, userLocation.lng]
+      : [48.5, -56.5];
+    const mapZoom = userLocation ? 9 : 6;
 
     return (
       <div className="h-full w-full">
-        <div
-          ref={mapRef}
+        <MapContainer
+          center={mapCenter}
+          zoom={mapZoom}
           className="w-full h-96 md:h-[500px] rounded-lg border border-gray-300"
-        ></div>
+          key={`${mapCenter[0]}-${mapCenter[1]}-${results.length}`}
+        >
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+
+          {userLocation && (
+            <Marker
+              position={[userLocation.lat, userLocation.lng]}
+              icon={userIcon}
+            >
+              <Popup>
+                <div style={{ fontSize: "14px" }}>
+                  <strong>Your Location</strong>
+                  <br />
+                  {userLocation.address || address}
+                </div>
+              </Popup>
+            </Marker>
+          )}
+
+          {results.map((fire, index) => {
+            const risk = userLocation
+              ? getRiskLevel(fire.distance, fire.STATUS)
+              : null;
+            return (
+              <Marker
+                key={fire.FIREID || index}
+                position={[fire.LATITUDE, fire.LONGITUDE]}
+                icon={createFireIcon(fire.STATUS)}
+              >
+                <Popup>
+                  <div style={{ fontSize: "14px", minWidth: "200px" }}>
+                    <strong
+                      style={{
+                        color:
+                          fire.STATUS === "OC"
+                            ? "#dc2626"
+                            : fire.STATUS === "BH"
+                            ? "#f59e0b"
+                            : "#16a34a",
+                      }}
+                    >
+                      {fire.NAME || `Fire #${fire.PROVFIRENUM}`}
+                    </strong>
+                    <br />
+                    <strong>Status:</strong> {getStatusText(fire.STATUS)}
+                    <br />
+                    <strong>Area:</strong>{" "}
+                    {fire.AREAEST ? `${fire.AREAEST} hectares` : "TBD"}
+                    <br />
+                    <strong>Cause:</strong> {fire.CAUSE || "Unknown"}
+                    <br />
+                    {userLocation && (
+                      <>
+                        <strong>Distance:</strong> {fire.distance.toFixed(1)} km
+                        <br />
+                      </>
+                    )}
+                    {risk && (
+                      <>
+                        <strong>Risk Level:</strong>{" "}
+                        <span
+                          style={{
+                            color:
+                              fire.STATUS === "OC"
+                                ? "#dc2626"
+                                : fire.STATUS === "BH"
+                                ? "#f59e0b"
+                                : "#16a34a",
+                          }}
+                        >
+                          {risk.level}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </Popup>
+              </Marker>
+            );
+          })}
+        </MapContainer>
       </div>
     );
   };
