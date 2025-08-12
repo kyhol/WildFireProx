@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 
 const WildfireProximityApp = () => {
   const [address, setAddress] = useState("");
@@ -6,8 +6,9 @@ const WildfireProximityApp = () => {
   const [results, setResults] = useState([]);
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState(null);
-  const [currentPage, setCurrentPage] = useState("list"); // "list" or "map"
+  const [currentPage, setCurrentPage] = useState("list");
   const [userLocation, setUserLocation] = useState(null);
+  const [leafletLoaded, setLeafletLoaded] = useState(false);
 
   // API endpoints
   const GEOCODING_API =
@@ -15,7 +16,7 @@ const WildfireProximityApp = () => {
 
   // Haversine formula for distance calculation
   const calculateDistance = (lat1, lon1, lat2, lon2) => {
-    const R = 6371; // Earth's radius in kilometers
+    const R = 6371;
     const dLat = ((lat2 - lat1) * Math.PI) / 180;
     const dLon = ((lon2 - lon1) * Math.PI) / 180;
     const a =
@@ -28,7 +29,6 @@ const WildfireProximityApp = () => {
     return R * c;
   };
 
-  // Real geocoding using ArcGIS (free, no API key needed)
   const geocodeAddress = async (address) => {
     try {
       const params = new URLSearchParams({
@@ -46,7 +46,6 @@ const WildfireProximityApp = () => {
       }
 
       const data = await response.json();
-      console.log("Geocoding response:", data);
 
       if (data.candidates && data.candidates.length > 0) {
         const location = data.candidates[0].location;
@@ -62,12 +61,10 @@ const WildfireProximityApp = () => {
         );
       }
     } catch (err) {
-      console.error("Geocoding error:", err);
       throw new Error(`Geocoding failed: ${err.message}`);
     }
   };
 
-  // Fetches live wildfire data from the NL government ArcGIS endpoint
   const getWildfireData = async () => {
     try {
       const endpoint =
@@ -90,7 +87,6 @@ const WildfireProximityApp = () => {
       }
 
       const data = await response.json();
-      console.log("Live Wildfire API response:", data);
 
       if (data.error) {
         throw new Error(`API Error: ${data.error.message}`);
@@ -114,7 +110,6 @@ const WildfireProximityApp = () => {
         return [];
       }
     } catch (err) {
-      console.error("Error fetching live wildfire data, using fallback:", err);
       setError("Could not fetch live data. Showing recent examples.");
       return [
         {
@@ -156,19 +151,6 @@ const WildfireProximityApp = () => {
           DISTRICT: "11",
           CAUSE: "Lightning",
         },
-        {
-          FIREID: "NL-2025-Labrador",
-          NAME: "Labrador City Area Fire",
-          STATUS: "UC",
-          LATITUDE: 52.94,
-          LONGITUDE: -66.91,
-          AREAEST: 2500,
-          FIREDATE: 1723161600000,
-          PROVFIRENUM: 304,
-          REGION: "LB",
-          DISTRICT: "20",
-          CAUSE: "Lightning",
-        },
       ];
     }
   };
@@ -192,10 +174,7 @@ const WildfireProximityApp = () => {
   const setCachedData = (data) => {
     try {
       const timestamp = Date.now();
-      const cacheData = {
-        data,
-        timestamp: timestamp,
-      };
+      const cacheData = { data, timestamp };
       sessionStorage.setItem("wildfireData", JSON.stringify(cacheData));
       setLastUpdated(new Date(timestamp));
     } catch (err) {
@@ -274,19 +253,13 @@ const WildfireProximityApp = () => {
     setResults([]);
 
     try {
-      console.log("Searching for:", address);
-
       const location = await geocodeAddress(address);
-      console.log("User location:", location);
       setUserLocation(location);
 
       let wildfires = getCachedData();
       if (!wildfires) {
-        console.log("Fetching fresh wildfire data...");
         wildfires = await getWildfireData();
         setCachedData(wildfires);
-      } else {
-        console.log("Using cached wildfire data");
       }
 
       if (wildfires.length === 0) {
@@ -311,92 +284,67 @@ const WildfireProximityApp = () => {
         }))
         .sort((a, b) => a.distance - b.distance);
 
-      console.log("Fires with distances:", firesWithDistance);
       setResults(firesWithDistance);
     } catch (err) {
-      console.error("Search error:", err);
       setError(err.message);
     } finally {
       setLoading(false);
     }
   };
 
+  // Load Leaflet once when component mounts
   useEffect(() => {
+    if (!window.L && !leafletLoaded) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+      link.integrity = "sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=";
+      link.crossOrigin = "";
+      document.head.appendChild(link);
+
+      const script = document.createElement("script");
+      script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+      script.integrity = "sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=";
+      script.crossOrigin = "";
+      script.onload = () => setLeafletLoaded(true);
+      script.onerror = () => {
+        console.error("Failed to load Leaflet");
+        setError("Map functionality unavailable");
+      };
+      document.body.appendChild(script);
+    } else if (window.L) {
+      setLeafletLoaded(true);
+    }
+
     const interval = setInterval(() => {
-      console.log("Clearing wildfire cache for auto-refresh.");
       sessionStorage.removeItem("wildfireData");
     }, 10 * 60 * 1000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [leafletLoaded]);
 
-  // Map Component
+  // Interactive Map Component
   const InteractiveMap = () => {
     const mapRef = useRef(null);
     const mapInstanceRef = useRef(null);
     const markersRef = useRef([]);
 
-    useEffect(() => {
-      // Load Leaflet dynamically
-      if (!window.L) {
-        const link = document.createElement("link");
-        link.rel = "stylesheet";
-        link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
-        document.head.appendChild(link);
-
-        const script = document.createElement("script");
-        script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
-        script.onload = initMap;
-        document.body.appendChild(script);
-      } else {
-        initMap();
-      }
-
-      return () => {
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.remove();
-          mapInstanceRef.current = null;
-        }
-      };
-    }, []);
-
-    useEffect(() => {
-      if (mapInstanceRef.current && (results.length > 0 || userLocation)) {
-        updateMapMarkers();
-      }
-    }, [results, userLocation]);
-
-    const initMap = () => {
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
-      }
-
-      // Center on Newfoundland and Labrador
-      const map = window.L.map(mapRef.current).setView([48.5, -56.5], 6);
-
-      window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "© OpenStreetMap contributors",
-      }).addTo(map);
-
-      mapInstanceRef.current = map;
-      updateMapMarkers();
-    };
-
-    const updateMapMarkers = () => {
+    const updateMapMarkers = useCallback(() => {
       if (!mapInstanceRef.current || !window.L) return;
 
-      // Clear existing markers
       markersRef.current.forEach((marker) => {
         mapInstanceRef.current.removeLayer(marker);
       });
       markersRef.current = [];
 
       const bounds = [];
+      const currentUserLocation = userLocation;
+      const currentResults = results;
+      const currentAddress = address;
 
-      // Add user location marker if available
-      if (userLocation) {
+      if (currentUserLocation) {
         const userMarker = window.L.marker(
-          [userLocation.lat, userLocation.lng],
+          [currentUserLocation.lat, currentUserLocation.lng],
           {
             icon: window.L.divIcon({
               html: '<div style="background: #3b82f6; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px;">📍</div>',
@@ -410,26 +358,25 @@ const WildfireProximityApp = () => {
         userMarker.bindPopup(`
           <div style="font-size: 14px;">
             <strong>Your Location</strong><br>
-            ${userLocation.address || address}
+            ${currentUserLocation.address || currentAddress}
           </div>
         `);
 
         markersRef.current.push(userMarker);
-        bounds.push([userLocation.lat, userLocation.lng]);
+        bounds.push([currentUserLocation.lat, currentUserLocation.lng]);
       }
 
-      // Add wildfire markers
-      results.forEach((fire) => {
+      currentResults.forEach((fire) => {
         const getMarkerColor = (status) => {
           switch (status) {
             case "OC":
-              return "#dc2626"; // red
+              return "#dc2626";
             case "BH":
-              return "#f59e0b"; // yellow
+              return "#f59e0b";
             case "UC":
-              return "#16a34a"; // green
+              return "#16a34a";
             default:
-              return "#6b7280"; // gray
+              return "#6b7280";
           }
         };
 
@@ -444,7 +391,7 @@ const WildfireProximityApp = () => {
           }),
         }).addTo(mapInstanceRef.current);
 
-        const risk = userLocation
+        const risk = currentUserLocation
           ? getRiskLevel(fire.distance, fire.STATUS)
           : null;
 
@@ -459,7 +406,7 @@ const WildfireProximityApp = () => {
             }<br>
             <strong>Cause:</strong> ${fire.CAUSE || "Unknown"}<br>
             ${
-              userLocation
+              currentUserLocation
                 ? `<strong>Distance:</strong> ${fire.distance.toFixed(
                     1
                   )} km<br>`
@@ -479,11 +426,58 @@ const WildfireProximityApp = () => {
         bounds.push([fire.LATITUDE, fire.LONGITUDE]);
       });
 
-      // Fit map to show all markers
       if (bounds.length > 0) {
         mapInstanceRef.current.fitBounds(bounds, { padding: [20, 20] });
       }
-    };
+    }, []);
+
+    const initMap = useCallback(() => {
+      if (!leafletLoaded || !window.L) return;
+
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+      }
+
+      const map = window.L.map(mapRef.current).setView([48.5, -56.5], 6);
+
+      window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "© OpenStreetMap contributors",
+      }).addTo(map);
+
+      mapInstanceRef.current = map;
+      updateMapMarkers();
+    }, [updateMapMarkers]);
+
+    useEffect(() => {
+      if (leafletLoaded) {
+        initMap();
+      }
+
+      return () => {
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.remove();
+          mapInstanceRef.current = null;
+        }
+      };
+    }, [initMap]);
+
+    // Update markers when results or userLocation changes
+    useEffect(() => {
+      if (mapInstanceRef.current && leafletLoaded) {
+        updateMapMarkers();
+      }
+    }, [results, userLocation, address, updateMapMarkers]);
+
+    if (!leafletLoaded) {
+      return (
+        <div className="w-full h-96 md:h-[500px] rounded-lg border border-gray-300 flex items-center justify-center">
+          <div className="text-center">
+            <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+            <p className="text-gray-600">Loading map...</p>
+          </div>
+        </div>
+      );
+    }
 
     return (
       <div className="h-full w-full">
@@ -495,7 +489,7 @@ const WildfireProximityApp = () => {
     );
   };
 
-  // Render the appropriate page
+  // Map View
   if (currentPage === "map") {
     return (
       <div className="max-w-6xl mx-auto p-6 bg-white min-h-screen">
@@ -516,7 +510,6 @@ const WildfireProximityApp = () => {
               </div>
             </div>
           </div>
-
           {lastUpdated && (
             <p className="text-sm text-gray-500">
               Data last updated: {lastUpdated.toLocaleString()}
@@ -549,8 +542,7 @@ const WildfireProximityApp = () => {
                 </>
               ) : (
                 <>
-                  <span>🔍</span>
-                  Search
+                  <span>🔍</span> Search
                 </>
               )}
             </button>
@@ -602,7 +594,7 @@ const WildfireProximityApp = () => {
     );
   }
 
-  // Original list view
+  // List View
   return (
     <div className="max-w-4xl mx-auto p-6 bg-white min-h-screen">
       <div className="text-center mb-8">
@@ -625,8 +617,7 @@ const WildfireProximityApp = () => {
             onClick={() => setCurrentPage("map")}
             className="mt-4 px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors flex items-center gap-2 mx-auto"
           >
-            <span>🗺️</span>
-            View Interactive Map
+            <span>🗺️</span>View Interactive Map
           </button>
         )}
       </div>
@@ -656,8 +647,7 @@ const WildfireProximityApp = () => {
               </>
             ) : (
               <>
-                <span>🔍</span>
-                Search
+                <span>🔍</span> Search
               </>
             )}
           </button>
@@ -677,7 +667,6 @@ const WildfireProximityApp = () => {
           <h2 className="text-2xl font-bold text-gray-800 mb-4">
             Active Wildfires Found: {results.length}
           </h2>
-
           {results.map((fire, index) => {
             const risk = getRiskLevel(fire.distance, fire.STATUS);
             return (
@@ -706,7 +695,6 @@ const WildfireProximityApp = () => {
                     </div>
                   </div>
                 </div>
-
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
                   <div>
                     <span className="text-sm font-medium text-gray-500">
@@ -747,7 +735,6 @@ const WildfireProximityApp = () => {
                     </div>
                   </div>
                 </div>
-
                 {fire.distance < 50 && fire.STATUS === "OC" && (
                   <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
                     <div className="flex items-start gap-2 text-red-800">
@@ -795,23 +782,12 @@ const WildfireProximityApp = () => {
           <div>
             <h4 className="font-medium mb-2">Important notes:</h4>
             <ul className="space-y-1 text-sm">
-              <li>• Distances are approximate</li>
-              <li>• Always follow official emergency alerts</li>
-              <li>• Wind and terrain affect actual risk</li>
-              <li>• For emergencies, call 911</li>
+              <li>• Distances are straight-line, not road distances</li>
+              <li>• Weather and terrain affect actual fire spread</li>
+              <li>• Always follow official emergency instructions</li>
+              <li>• Contact authorities for evacuation guidance</li>
             </ul>
           </div>
-        </div>
-        <div className="mt-4 pt-4 border-t border-blue-200">
-          <a
-            href="https://www.gov.nl.ca/ffa/public-education/forestry/forest-fires/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-700 hover:text-blue-800 flex items-center gap-1 text-sm font-medium"
-          >
-            <span>🔗</span>
-            Official NL Forest Fire Information
-          </a>
         </div>
       </div>
     </div>
