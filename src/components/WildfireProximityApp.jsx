@@ -166,6 +166,39 @@ const WildfireProximityApp = () => {
     }
   };
 
+  const getHotspotData = async () => {
+    try {
+      const hotspotApiUrl =
+        "https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/Satellite_VIIRS_Thermal_Hotspots_and_Fire_Activity/FeatureServer/0/query?where=1%3D1&geometry=%7B%22xmin%22%3A-60%2C%22ymin%22%3A46%2C%22xmax%22%3A-52%2C%22ymax%22%3A52%7D&geometryType=esriGeometryEnvelope&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=*&outSR=4326&f=json";
+
+      const response = await fetch(hotspotApiUrl);
+
+      if (!response.ok) {
+        return []; // Silently fail for hotspots, they're supplementary
+      }
+
+      const data = await response.json();
+
+      if (data.error || !data.features) {
+        return [];
+      }
+
+      return data.features
+        .map((feature) => ({
+          ...feature.attributes,
+          LATITUDE: feature.attributes.latitude,
+          LONGITUDE: feature.attributes.longitude,
+          FIREID: `hotspot-${feature.attributes.OBJECTID}`,
+          NAME: `Thermal Hotspot (${feature.attributes.confidence})`,
+          STATUS: feature.attributes.confidence,
+          isHotspot: true, // Flag to identify hotspots
+        }))
+        .filter((hotspot) => hotspot.LATITUDE && hotspot.LONGITUDE);
+    } catch (err) {
+      return []; // Silently fail for hotspots
+    }
+  };
+
   const getCachedData = () => {
     try {
       const cached = JSON.parse(sessionStorage.getItem("wildfireData") || "{}");
@@ -198,7 +231,7 @@ const WildfireProximityApp = () => {
       case "OC":
         return "text-red-700 bg-red-100 border-red-300";
       case "BH":
-        return "text-yellow-700 bg-yellow-100 border-yellow-300";
+        return "text-purple-700 bg-purple-100 border-purple-300";
       case "UC":
         return "text-green-700 bg-green-100 border-green-300";
       case "O":
@@ -273,11 +306,30 @@ const WildfireProximityApp = () => {
         setCachedData(wildfires);
       }
 
+      // Get hotspot data for map display (separate from main search results)
+      const hotspots = await getHotspotData();
+
       if (wildfires.length === 0) {
         setResults([]);
         if (!error) {
           setError(
             "No active wildfires found in the database. Your area is clear."
+          );
+        }
+        // Still store hotspots for map even if no wildfires
+        if (hotspots.length > 0) {
+          const hotspotsWithDistance = hotspots.map((hotspot) => ({
+            ...hotspot,
+            distance: calculateDistance(
+              location.lat,
+              location.lng,
+              hotspot.LATITUDE,
+              hotspot.LONGITUDE
+            ),
+          }));
+          sessionStorage.setItem(
+            "mapHotspots",
+            JSON.stringify(hotspotsWithDistance)
           );
         }
         return;
@@ -295,7 +347,25 @@ const WildfireProximityApp = () => {
         }))
         .sort((a, b) => a.distance - b.distance);
 
+      // Calculate distances for hotspots for map display
+      const hotspotsWithDistance = hotspots.map((hotspot) => ({
+        ...hotspot,
+        distance: calculateDistance(
+          location.lat,
+          location.lng,
+          hotspot.LATITUDE,
+          hotspot.LONGITUDE
+        ),
+      }));
+
+      // Set only wildfires as main results (no hotspots in the list view)
       setResults(firesWithDistance);
+
+      // Store hotspots separately for map use
+      sessionStorage.setItem(
+        "mapHotspots",
+        JSON.stringify(hotspotsWithDistance)
+      );
     } catch (err) {
       setError(err.message);
     } finally {
@@ -306,30 +376,59 @@ const WildfireProximityApp = () => {
   useEffect(() => {
     const interval = setInterval(() => {
       sessionStorage.removeItem("wildfireData");
+      sessionStorage.removeItem("mapHotspots");
     }, 10 * 60 * 1000);
 
     return () => clearInterval(interval);
   }, []);
 
-  // Custom fire marker icon
-  const createFireIcon = (status) => {
-    const color =
-      status === "OC" ? "#dc2626" : status === "BH" ? "#f59e0b" : "#16a34a";
-    return L.divIcon({
-      html: `<div style="background: ${color}; color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 14px; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">🔥</div>`,
-      className: "custom-div-icon",
-      iconSize: [24, 24],
-      iconAnchor: [12, 12],
-    });
-  };
+  // Custom fire marker icon - memoized for performance
+  const createFireIcon = React.useMemo(() => {
+    const iconCache = {};
 
-  // User location icon
-  const userIcon = L.divIcon({
-    html: '<div style="background: #3b82f6; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px;">📍</div>',
-    className: "custom-div-icon",
-    iconSize: [20, 20],
-    iconAnchor: [10, 10],
-  });
+    return (status, isHotspot = false) => {
+      const cacheKey = `${status}-${isHotspot}`;
+
+      if (iconCache[cacheKey]) {
+        return iconCache[cacheKey];
+      }
+
+      let icon;
+      if (isHotspot) {
+        const color = status?.toLowerCase() === "high" ? "#dc2626" : "#f59e0b";
+        icon = L.divIcon({
+          html: `<div style="background: ${color}; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 10px; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">🔥</div>`,
+          className: "custom-div-icon",
+          iconSize: [20, 20],
+          iconAnchor: [10, 10],
+        });
+      } else {
+        const color =
+          status === "OC" ? "#dc2626" : status === "BH" ? "#9333ea" : "#16a34a";
+        icon = L.divIcon({
+          html: `<div style="background: ${color}; color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 14px; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">🔥</div>`,
+          className: "custom-div-icon",
+          iconSize: [24, 24],
+          iconAnchor: [12, 12],
+        });
+      }
+
+      iconCache[cacheKey] = icon;
+      return icon;
+    };
+  }, []);
+
+  // User location icon - memoized for performance
+  const userIcon = React.useMemo(
+    () =>
+      L.divIcon({
+        html: '<div style="background: #3b82f6; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px;">📍</div>',
+        className: "custom-div-icon",
+        iconSize: [20, 20],
+        iconAnchor: [10, 10],
+      }),
+    []
+  );
 
   // Interactive Map Component using react-leaflet
   const InteractiveMap = () => {
@@ -338,17 +437,33 @@ const WildfireProximityApp = () => {
       : [48.5, -56.5];
     const mapZoom = userLocation ? 9 : 6;
 
+    // Get hotspots from storage for map display
+    const hotspots = JSON.parse(sessionStorage.getItem("mapHotspots") || "[]");
+
     return (
       <div className="h-full w-full">
         <MapContainer
           center={mapCenter}
           zoom={mapZoom}
           className="w-full h-96 md:h-[500px] rounded-lg border border-gray-300"
-          key={`${mapCenter[0]}-${mapCenter[1]}-${results.length}`}
+          key={`${mapCenter[0]}-${mapCenter[1]}-${results.length}-${hotspots.length}`}
+          preferCanvas={true}
+          zoomControl={true}
+          scrollWheelZoom={true}
+          doubleClickZoom={true}
+          touchZoom={true}
+          zoomAnimation={false}
+          markerZoomAnimation={false}
+          updateWhenZooming={false}
+          updateWhenIdle={true}
         >
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            maxZoom={18}
+            keepBuffer={2}
+            updateWhenIdle={true}
+            updateWhenZooming={false}
           />
 
           {userLocation && (
@@ -366,6 +481,7 @@ const WildfireProximityApp = () => {
             </Marker>
           )}
 
+          {/* Display main fire results */}
           {results.map((fire, index) => {
             const risk = userLocation
               ? getRiskLevel(fire.distance, fire.STATUS)
@@ -384,7 +500,7 @@ const WildfireProximityApp = () => {
                           fire.STATUS === "OC"
                             ? "#dc2626"
                             : fire.STATUS === "BH"
-                            ? "#f59e0b"
+                            ? "#9333ea"
                             : "#16a34a",
                       }}
                     >
@@ -413,7 +529,7 @@ const WildfireProximityApp = () => {
                               fire.STATUS === "OC"
                                 ? "#dc2626"
                                 : fire.STATUS === "BH"
-                                ? "#f59e0b"
+                                ? "#9333ea"
                                 : "#16a34a",
                           }}
                         >
@@ -426,6 +542,51 @@ const WildfireProximityApp = () => {
               </Marker>
             );
           })}
+
+          {/* Display hotspots as smaller markers */}
+          {hotspots.map((hotspot, index) => (
+            <Marker
+              key={`hotspot-${hotspot.FIREID || index}`}
+              position={[hotspot.LATITUDE, hotspot.LONGITUDE]}
+              icon={createFireIcon(hotspot.STATUS, true)}
+            >
+              <Popup>
+                <div style={{ fontSize: "12px", minWidth: "180px" }}>
+                  <strong
+                    style={{
+                      color:
+                        hotspot.STATUS?.toLowerCase() === "high"
+                          ? "#dc2626"
+                          : "#f59e0b",
+                    }}
+                  >
+                    {hotspot.NAME}
+                  </strong>
+                  <br />
+                  <strong>Type:</strong> Thermal Hotspot
+                  <br />
+                  <strong>Confidence:</strong> {hotspot.STATUS}
+                  <br />
+                  {hotspot.frp && (
+                    <>
+                      <strong>Intensity:</strong> {hotspot.frp} MW
+                      <br />
+                    </>
+                  )}
+                  {userLocation && (
+                    <>
+                      <strong>Distance:</strong> {hotspot.distance.toFixed(1)}{" "}
+                      km
+                      <br />
+                    </>
+                  )}
+                  <em style={{ fontSize: "10px", color: "#666" }}>
+                    Satellite detection - not confirmed fire
+                  </em>
+                </div>
+              </Popup>
+            </Marker>
+          ))}
         </MapContainer>
       </div>
     );
@@ -504,16 +665,34 @@ const WildfireProximityApp = () => {
             <h3 className="text-lg font-semibold text-gray-800 mb-2">Legend</h3>
             <div className="flex flex-wrap gap-4 text-sm">
               <div className="flex items-center gap-2">
-                <div className="w-4 h-4 bg-red-600 rounded-full"></div>
-                <span>Out-of-Control</span>
+                <div className="w-6 h-6 bg-red-600 rounded-full flex items-center justify-center text-white text-xs">
+                  🔥
+                </div>
+                <span>Out-of-Control Fire</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-4 h-4 bg-yellow-500 rounded-full"></div>
-                <span>Being Held</span>
+                <div className="w-6 h-6 bg-purple-600 rounded-full flex items-center justify-center text-white text-xs">
+                  🔥
+                </div>
+                <span>Being Held Fire</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-4 h-4 bg-green-600 rounded-full"></div>
-                <span>Under Control</span>
+                <div className="w-6 h-6 bg-green-600 rounded-full flex items-center justify-center text-white text-xs">
+                  🔥
+                </div>
+                <span>Under Control Fire</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 bg-red-600 rounded-full flex items-center justify-center text-white text-xs">
+                  🔥
+                </div>
+                <span>High Confidence Hotspot</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 bg-yellow-500 rounded-full flex items-center justify-center text-white text-xs">
+                  🔥
+                </div>
+                <span>Lower Confidence Hotspot</span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-4 h-4 bg-blue-500 rounded-full"></div>
@@ -728,6 +907,7 @@ const WildfireProximityApp = () => {
               <li>• Weather and terrain affect actual fire spread</li>
               <li>• Always follow official emergency instructions</li>
               <li>• Contact authorities for evacuation guidance</li>
+              <li>• Map also shows satellite thermal hotspots for context</li>
             </ul>
           </div>
         </div>

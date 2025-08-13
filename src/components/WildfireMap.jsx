@@ -10,8 +10,6 @@ import {
 import L from "leaflet";
 
 // --- FIX for broken marker icons with Webpack ---
-// This is a common issue with React-Leaflet and ensures that the
-// default marker icons are found and displayed correctly.
 import icon from "leaflet/dist/images/marker-icon.png";
 import iconShadow from "leaflet/dist/images/marker-shadow.png";
 
@@ -34,11 +32,11 @@ const ChangeView = ({ center, zoom }) => {
 // Helper function to get a color based on the fire's status.
 const getStatusColor = (status) => {
   switch (status) {
-    case "OC":
+    case "OC": // Out of Control
       return "red";
-    case "BH":
+    case "BH": // Being Held
       return "orange";
-    case "UC":
+    case "UC": // Under Control
       return "green";
     default:
       return "gray";
@@ -78,11 +76,11 @@ const WildfireMap = ({ fires, userLocation }) => {
 
       {/* Render a circle for each wildfire */}
       {fires.map((fire) => {
-        // Use a circle to represent the fire area. Radius is in meters.
-        // Formula for radius from area: r = sqrt(Area / PI). 1 hectare = 10,000 sq meters.
+        // 1 hectare = 10,000 square meters. The area of a circle is π * r².
+        // So, the radius in meters is sqrt(Area in hectares * 10,000 / PI).
         const radius = fire.AREAEST
           ? Math.sqrt((fire.AREAEST * 10000) / Math.PI)
-          : 1000; // Default to 1km radius
+          : 500; // Default to a 500-meter radius if area is not specified
 
         return (
           <Circle
@@ -91,23 +89,33 @@ const WildfireMap = ({ fires, userLocation }) => {
             pathOptions={{
               color: getStatusColor(fire.STATUS),
               fillColor: getStatusColor(fire.STATUS),
-              fillOpacity: 0.5,
+              fillOpacity: 0.4,
             }}
             radius={radius}
           >
             <Popup>
-              <div className="text-base font-bold">
-                {fire.NAME || "Unnamed Fire"}
-              </div>
-              <div>
+              <div style={{ fontSize: "14px", minWidth: "200px" }}>
+                <strong
+                  style={{
+                    color: getStatusColor(fire.STATUS),
+                  }}
+                >
+                  {fire.NAME || `Fire #${fire.PROVFIRENUM}`}
+                </strong>
+                <br />
                 <strong>Status:</strong> {fire.STATUS}
-              </div>
-              <div>
+                <br />
                 <strong>Area:</strong>{" "}
-                {fire.AREAEST ? `${fire.AREAEST} hectares` : "N/A"}
-              </div>
-              <div>
-                <strong>Distance:</strong> {fire.distance.toFixed(1)} km away
+                {fire.AREAEST
+                  ? `${fire.AREAEST.toLocaleString()} hectares`
+                  : "N/A"}
+                <br />
+                {userLocation && (
+                  <>
+                    <strong>Distance:</strong> {fire.distance.toFixed(1)} km
+                    away
+                  </>
+                )}
               </div>
             </Popup>
           </Circle>
