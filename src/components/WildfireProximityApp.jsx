@@ -909,6 +909,18 @@ const WildfireProximityApp = () => {
               <li>• Contact authorities for evacuation guidance</li>
               <li>• Map also shows satellite thermal hotspots for context</li>
               <li>
+                • Check for official advisories on the{" "}
+                <a
+                  href="https://www.gov.nl.ca/alerts/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline font-medium hover:text-blue-900"
+                >
+                  NL Public Alerts
+                </a>{" "}
+                page.
+              </li>
+              <li>
                 • For up-to-date info, see the{" "}
                 <a
                   href="https://www.gov.nl.ca/releases/wildfire-news/"
