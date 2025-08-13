@@ -908,6 +908,30 @@ const WildfireProximityApp = () => {
               <li>• Always follow official emergency instructions</li>
               <li>• Contact authorities for evacuation guidance</li>
               <li>• Map also shows satellite thermal hotspots for context</li>
+              <li>
+                • For up-to-date info, see the{" "}
+                <a
+                  href="https://www.gov.nl.ca/releases/wildfire-news/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline font-medium hover:text-blue-900"
+                >
+                  latest wildfire news
+                </a>
+                .
+              </li>
+              <li>
+                • Know{" "}
+                <a
+                  href="https://www.getprepared.gc.ca/cnt/hzd/wldfrs-prp-en.aspx"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline font-medium hover:text-blue-900"
+                >
+                  what to do in a wildfire
+                </a>
+                .
+              </li>
             </ul>
           </div>
         </div>
